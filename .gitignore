@@ -10,3 +10,6 @@ env_vars/*.env
 
 # Almacenamiento persistente (MySQL, config de Zabbix, certificados, Caddy)
 data/
+
+# VSCode
+*.code-workspace

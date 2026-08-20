@@ -22,8 +22,9 @@ sudo git clone <url-de-este-repo> /opt/zabbix
 cd /opt/zabbix
 
 cp .env.example .env
-# Edita .env: busca los 3 campos marcados ⚠️ OBLIGATORIO (MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD,
-# MYSQL_MONITOR_PASSWORD) y cámbialos. El resto ya trae defaults razonables.
+# Edita .env: busca los 2 campos marcados ⚠️ OBLIGATORIO (MYSQL_PASSWORD, MYSQL_MONITOR_PASSWORD)
+# y cámbialos. El resto ya trae defaults razonables (incluida la contraseña root de MySQL, que
+# es opcional — ver "Sobre MYSQL_ROOT_PASSWORD" más abajo).
 nano .env
 
 ./scripts/generate-certs.sh   # certificado autofirmado para HTTPS (ver sección HTTPS abajo)
@@ -98,20 +99,39 @@ upstream lo hace así", sino esto:
 
 ## Sobre `MYSQL_ROOT_PASSWORD`
 
-Tiene dos usos, por eso conviene no borrarla del `.env` tras el primer arranque:
+Es **opcional**. Zabbix en sí no la necesita en ningún momento: `zabbix-server` crea el schema
+usando directamente `MYSQL_USER`/`MYSQL_PASSWORD` (ese usuario ya es dueño de la base de datos
+`MYSQL_DATABASE` desde que la crea la propia imagen de MySQL, así que le alcanza para crear las
+tablas sin ser root) — esto es exactamente lo que hace también el repo oficial
+`zabbix/zabbix-docker`, que tampoco le pasa la contraseña root a sus componentes de Zabbix.
 
-1. **Primer arranque**: `zabbix-server` la usa para crear la base de datos, el usuario
-   `MYSQL_USER` y cargar el schema inicial. En arranques posteriores, con la BD ya poblada,
-   no hace falta.
-2. **Administración posterior**: te permite entrar como root al MySQL del stack sin exponer
-   el puerto 3306 al exterior, por ejemplo para crear usuarios de monitorización:
-   ```bash
-   docker compose exec mysql-server mysql -uroot -p"$MYSQL_ROOT_PASSWORD"
-   ```
-   Esto es justo lo que hace automáticamente `mysql-init/01-create-zbx-monitor-user.sh` en el
-   primer arranque (crea el usuario `zbx_monitor` para la plantilla "MySQL by Zabbix agent 2").
-   Si el volumen de `data/mysql` ya existía cuando añadiste este script, créalo a mano con el
-   mismo comando de arriba y el SQL que hay dentro del script.
+El único que sí necesita una cuenta con privilegios root dentro de este stack es nuestro propio
+`mysql-init/01-create-zbx-monitor-user.sh`, porque `GRANT ... ON *.*` (privilegios globales, los
+que pide la plantilla "MySQL by Zabbix agent 2") sólo los puede otorgar una cuenta con
+privilegios de administrador — un usuario con todos los privilegios sólo sobre `zabbix`.* no
+alcanza.
+
+Por eso, por defecto:
+
+- `MYSQL_RANDOM_ROOT_PASSWORD=yes` en `.env.example` — MySQL genera una contraseña root al azar
+  en el primer arranque. El script de arriba la recibe automáticamente (el entrypoint de la
+  imagen la deja disponible en el entorno antes de correr los scripts de init), así que
+  `zbx_monitor` se crea igual sin que tengas que hacer nada. La contraseña generada queda **una
+  sola vez** en el log: `docker compose logs mysql-server | grep "GENERATED ROOT PASSWORD"`.
+- Si más adelante quieres entrar como root a mano (por ejemplo para crear otro usuario de
+  monitorización, o inspeccionar algo con privilegios), necesitas conocer esa contraseña. Dos
+  opciones: capturarla de los logs del primer arranque, o mejor, fijar tú una desde el inicio:
+  ```bash
+  # En .env, antes del primer "docker compose up -d":
+  MYSQL_ROOT_PASSWORD=tu-contraseña
+  #MYSQL_RANDOM_ROOT_PASSWORD=yes   # coméntala o bórrala — si dejas las dos, la aleatoria gana
+  ```
+  ```bash
+  docker compose exec mysql-server mysql -uroot -p"$MYSQL_ROOT_PASSWORD"
+  ```
+- Si el volumen de `data/mysql` ya existía cuando añadiste `01-create-zbx-monitor-user.sh` (no
+  llegó a correr en el primer arranque), créalo a mano con el comando de arriba y el SQL que hay
+  dentro del script — necesitas la contraseña root de ese primer arranque para entrar.
 
 ## Sizing de memoria
 
