@@ -1,0 +1,12 @@
+# Variables de entorno reales (contraseñas, tags de imagen, puertos)
+.env
+
+# Override local no versionado (variaciones del stack: Let's Encrypt, puertos, etc.)
+docker-compose.override.yml
+
+# Variables de tuning avanzado por servicio (zabbix_server.conf, php-fpm, agent2...); sólo
+# los .example se versionan.
+env_vars/*.env
+
+# Almacenamiento persistente (MySQL, config de Zabbix, certificados, Caddy)
+data/

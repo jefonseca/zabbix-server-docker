@@ -1,0 +1,10 @@
+# Plantilla para el modo Let's Encrypt (ver docker-compose.override.yml.example, Ejemplo 3).
+# Copia este archivo a caddy/Caddyfile (no se commitea el real, tiene tu dominio/email) y
+# ajusta los valores. Caddy obtiene y renueva el certificado automáticamente.
+
+zabbix.tu-dominio.com {
+    # Email opcional para avisos de Let's Encrypt (ACME); descomenta si lo quieres.
+    # tls tu-email@tu-dominio.com
+
+    reverse_proxy zabbix-web:8080
+}

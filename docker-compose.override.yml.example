@@ -1,0 +1,57 @@
+# Plantilla de override. Copia este archivo a "docker-compose.override.yml" (ese nombre sí
+# está en .gitignore, no se commitea) y edítalo a tu gusto. Docker Compose lo detecta y
+# fusiona automáticamente con docker-compose.yml en cada "docker compose up -d", sin
+# necesidad de pasar -f.
+#
+# Importante sobre cómo fusiona Compose: las claves tipo mapa (environment) se combinan
+# entrada por entrada, pero las claves tipo lista (ports, volumes, profiles, command...) se
+# REEMPLAZAN por completo por lo que pongas aquí. Eso es lo que permite, por ejemplo,
+# desactivar limpiamente los "ports" de zabbix-web más abajo.
+#
+# ---------------------------------------------------------------------------------------
+# Ejemplo 1: cambiar puertos publicados (p.ej. si ya usas el 80/443 del host para otra cosa)
+# ---------------------------------------------------------------------------------------
+# services:
+#   zabbix-web:
+#     ports:
+#       - "8080:8080"
+#       - "8443:8443"
+
+# ---------------------------------------------------------------------------------------
+# Ejemplo 2: montar un my.cnf adicional para MySQL
+# ---------------------------------------------------------------------------------------
+# services:
+#   mysql-server:
+#     volumes:
+#       - ./data/mysql:/var/lib/mysql
+#       - ./mysql-init/01-create-zbx-monitor-user.sh:/docker-entrypoint-initdb.d/01-create-zbx-monitor-user.sh:ro
+#       - ./mysql-extra.cnf:/etc/mysql/conf.d/extra.cnf:ro
+
+# ---------------------------------------------------------------------------------------
+# Ejemplo 3 (el más elaborado): Let's Encrypt real en vez del certificado autofirmado.
+#
+# Requiere que el dominio ya apunte al VPS y que el puerto 80 sea alcanzable desde internet
+# para el reto HTTP-01 (por eso NO es compatible con el modo Cloudflare/cloudflared del
+# .env por defecto a la vez que Let's Encrypt directo — usa uno de los dos).
+#
+# 1. Copia caddy/Caddyfile.example a caddy/Caddyfile y pon tu dominio/email reales.
+# 2. Descomenta el bloque de abajo.
+# ---------------------------------------------------------------------------------------
+# services:
+#   zabbix-web:
+#     ports: []   # ya no publica 80/443 directo; sólo accesible vía Caddy en zabbix-net
+#
+#   caddy:
+#     image: caddy:2-alpine
+#     restart: unless-stopped
+#     networks:
+#       - zabbix-net
+#     ports:
+#       - "80:80"
+#       - "443:443"
+#     volumes:
+#       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+#       - ./data/caddy/data:/data
+#       - ./data/caddy/config:/config
+#     depends_on:
+#       - zabbix-web

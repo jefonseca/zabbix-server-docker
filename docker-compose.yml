@@ -1,0 +1,185 @@
+networks:
+  zabbix-net:
+    ipam:
+      config:
+        # Subred fija (en vez de dejar que Docker la autoasigne) para poder autorizar de
+        # forma estable, en nginx/server-common.conf, las consultas del zabbix-agent2 a los
+        # endpoints de estado de nginx/PHP-FPM. Si choca con otra red ya usada en el VPS,
+        # cámbiala aquí y también en nginx/server-common.conf.
+        - subnet: 172.28.55.0/24
+
+services:
+  mysql-server:
+    image: mysql:${MYSQL_VERSION:-8.0}
+    restart: unless-stopped
+    networks:
+      - zabbix-net
+    command:
+      - mysqld
+      - --skip-mysqlx
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --log_bin_trust_function_creators=1
+      - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-256M}
+    environment:
+      TZ: ${TZ:-UTC}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-zabbix}
+      MYSQL_USER: ${MYSQL_USER:-zabbix}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_MONITOR_PASSWORD: ${MYSQL_MONITOR_PASSWORD}
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+      - ./mysql-init/01-create-zbx-monitor-user.sh:/docker-entrypoint-initdb.d/01-create-zbx-monitor-user.sh:ro
+    # Variables MySQL nativas adicionales (ej. MYSQL_INITDB_SKIP_TZINFO), opcional, no commiteado.
+    env_file:
+      - path: ./env_vars/mysql.env
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: ${MYSQL_MEM_LIMIT:-640m}
+
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:${ZBX_VERSION:-alpine-7.0-latest}
+    restart: unless-stopped
+    networks:
+      - zabbix-net
+    depends_on:
+      mysql-server:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-UTC}
+      DB_SERVER_HOST: mysql-server
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-zabbix}
+      MYSQL_USER: ${MYSQL_USER:-zabbix}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      # Sólo se usa en el primer arranque, para crear el schema si la BD está vacía.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # Tuning de zabbix_server.conf vía variables nativas de la imagen (verificado contra
+      # templates/entrypoints/lib/server-config.sh de zabbix/zabbix-docker rama 7.0). Vacías por
+      # defecto = usa el default interno de Zabbix, sin cambio de comportamiento. Para el resto de
+      # directivas disponibles (TLS, Vault, HA, VMware, SNMP...) usa env_vars/zabbix-server.env.
+      ZBX_STARTPOLLERS: ${ZBX_STARTPOLLERS:-}
+      ZBX_STARTPOLLERSUNREACHABLE: ${ZBX_STARTPOLLERSUNREACHABLE:-}
+      ZBX_STARTTRAPPERS: ${ZBX_STARTTRAPPERS:-}
+      ZBX_STARTPINGERS: ${ZBX_STARTPINGERS:-}
+      ZBX_STARTDISCOVERERS: ${ZBX_STARTDISCOVERERS:-}
+      ZBX_STARTHTTPPOLLERS: ${ZBX_STARTHTTPPOLLERS:-}
+      ZBX_STARTPREPROCESSORS: ${ZBX_STARTPREPROCESSORS:-}
+      ZBX_STARTDBSYNCERS: ${ZBX_STARTDBSYNCERS:-}
+      ZBX_STARTTIMERS: ${ZBX_STARTTIMERS:-}
+      ZBX_STARTESCALATORS: ${ZBX_STARTESCALATORS:-}
+      ZBX_STARTALERTERS: ${ZBX_STARTALERTERS:-}
+      ZBX_CACHESIZE: ${ZBX_CACHESIZE:-}
+      ZBX_HISTORYCACHESIZE: ${ZBX_HISTORYCACHESIZE:-}
+      ZBX_HISTORYINDEXCACHESIZE: ${ZBX_HISTORYINDEXCACHESIZE:-}
+      ZBX_TRENDCACHESIZE: ${ZBX_TRENDCACHESIZE:-}
+      ZBX_VALUECACHESIZE: ${ZBX_VALUECACHESIZE:-}
+      ZBX_TIMEOUT: ${ZBX_TIMEOUT:-}
+      ZBX_HOUSEKEEPINGFREQUENCY: ${ZBX_HOUSEKEEPINGFREQUENCY:-}
+      ZBX_LOGSLOWQUERIES: ${ZBX_LOGSLOWQUERIES:-}
+      ZBX_LOADMODULE: ${ZBX_LOADMODULE:-}
+    volumes:
+      - ./data/zabbix/alertscripts:/usr/lib/zabbix/alertscripts
+      - ./data/zabbix/externalscripts:/usr/lib/zabbix/externalscripts
+      - ./data/zabbix/export:/var/lib/zabbix/export
+      - ./data/zabbix/modules:/var/lib/zabbix/modules
+      - ./data/zabbix/enc:/var/lib/zabbix/enc
+    # Tuning avanzado adicional (TLS, Vault, HA, VMware, SNMP...), opcional, no commiteado.
+    env_file:
+      - path: ./env_vars/zabbix-server.env
+        required: false
+    ports:
+      - "${ZABBIX_SERVER_PORT:-10051}:10051"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 sh -c 'exec 3<>/dev/tcp/127.0.0.1/10051'"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    mem_limit: ${ZABBIX_SERVER_MEM_LIMIT:-256m}
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:${ZBX_VERSION:-alpine-7.0-latest}
+    restart: unless-stopped
+    networks:
+      - zabbix-net
+    depends_on:
+      mysql-server:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-UTC}
+      PHP_TZ: ${TZ:-UTC}
+      DB_SERVER_HOST: mysql-server
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-zabbix}
+      MYSQL_USER: ${MYSQL_USER:-zabbix}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      ZBX_SERVER_HOST: zabbix-server
+      # Pool de PHP-FPM: el factor #1 de consumo de RAM del frontend. Cada child ronda 30-50 MB,
+      # así que el default de la imagen (pm.max_children=50) puede llegar a ~2 GB él solo — por
+      # eso estas 4 variables van con default seguro para VPS de 2 GB, no vacías. Ver tabla de
+      # sizing en el README para subir estos valores en VPS de 4/8 GB.
+      PHP_FPM_PM: ${PHP_FPM_PM:-dynamic}
+      PHP_FPM_PM_MAX_CHILDREN: ${PHP_FPM_PM_MAX_CHILDREN:-6}
+      PHP_FPM_PM_START_SERVERS: ${PHP_FPM_PM_START_SERVERS:-2}
+      PHP_FPM_PM_MIN_SPARE_SERVERS: ${PHP_FPM_PM_MIN_SPARE_SERVERS:-1}
+      PHP_FPM_PM_MAX_SPARE_SERVERS: ${PHP_FPM_PM_MAX_SPARE_SERVERS:-3}
+      PHP_FPM_PM_MAX_REQUESTS: ${PHP_FPM_PM_MAX_REQUESTS:-0}
+      # php.ini — vacías por defecto = default interno de la imagen. Ajustables por env_vars/.
+      ZBX_MAXEXECUTIONTIME: ${ZBX_MAXEXECUTIONTIME:-}
+      ZBX_MEMORYLIMIT: ${ZBX_MEMORYLIMIT:-}
+      ZBX_POSTMAXSIZE: ${ZBX_POSTMAXSIZE:-}
+      ZBX_UPLOADMAXFILESIZE: ${ZBX_UPLOADMAXFILESIZE:-}
+      ZBX_MAXINPUTTIME: ${ZBX_MAXINPUTTIME:-}
+    volumes:
+      # Certificado HTTPS: autofirmado por defecto (scripts/generate-certs.sh) o el que
+      # coloques a mano aquí (ssl.crt / ssl.key / dhparam.pem) — persistente, fuera de git.
+      - ./data/nginx/ssl:/etc/ssl/nginx:ro
+      # Habilita que zabbix-agent2 (otro contenedor) pueda leer /nginx-status y /status,/ping
+      # — ver nginx/server-common.conf para el detalle de por qué hace falta este override.
+      - ./nginx/server-common.conf:/etc/nginx/includes/server-common.conf:ro
+    # Tuning avanzado adicional (SSO, restricciones de acceso al GUI, DB TLS...), opcional.
+    env_file:
+      - path: ./env_vars/zabbix-web.env
+        required: false
+    ports:
+      - "${ZABBIX_WEB_HTTP_PORT:-80}:8080"
+      - "${ZABBIX_WEB_HTTPS_PORT:-443}:8443"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    mem_limit: ${ZABBIX_WEB_MEM_LIMIT:-256m}
+
+  zabbix-agent2:
+    image: zabbix/zabbix-agent2:${ZBX_VERSION:-alpine-7.0-latest}
+    restart: unless-stopped
+    networks:
+      - zabbix-net
+    depends_on:
+      - zabbix-server
+    environment:
+      TZ: ${TZ:-UTC}
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_HOSTNAME: ${COMPOSE_PROJECT_NAME:-zabbix}-agent
+      # Tuning de zabbix_agent2.conf — vacías por defecto = default interno de la imagen.
+      ZBX_REFRESHACTIVECHECKS: ${ZBX_REFRESHACTIVECHECKS:-}
+      ZBX_BUFFERSIZE: ${ZBX_BUFFERSIZE:-}
+      ZBX_TIMEOUT: ${ZBX_TIMEOUT:-}
+      ZBX_UNSAFEUSERPARAMETERS: ${ZBX_UNSAFEUSERPARAMETERS:-}
+      ZBX_DEBUGLEVEL: ${ZBX_DEBUGLEVEL:-}
+    # Tuning avanzado adicional (TLS, plugins, DenyKey/AllowKey...), opcional.
+    env_file:
+      - path: ./env_vars/zabbix-agent2.env
+        required: false
+    # Sin "ports": sólo necesita ser alcanzable desde zabbix-server dentro de zabbix-net
+    # (passive checks contra zabbix-agent2:10050).
+    mem_limit: ${ZABBIX_AGENT_MEM_LIMIT:-96m}
