@@ -234,17 +234,49 @@ host(s) y plantillas **nativas** desde el frontend web (Data collection → Host
   - `{$MYSQL.DSN}` = `tcp://mysql-server:3306`
   - `{$MYSQL.USER}` = `zbx_monitor`
   - `{$MYSQL.PASSWORD}` = el valor de `MYSQL_MONITOR_PASSWORD` en tu `.env`
-- **Linux/host del agente** (plantilla **"Linux by Zabbix agent"**): métricas del contenedor
-  del propio agente, no del VPS completo. Para monitorizar el VPS entero haría falta montar
-  `/proc`, `/sys`, etc. en `zabbix-agent2` — no incluido por defecto, es una extensión futura.
 - **Salud del propio Zabbix server**: no usa agente. Activa el host predefinido
   **"Zabbix server"** (Data collection → Hosts) y adjúntale la plantilla **"Zabbix server
   health"** — son ítems internos que evalúa el propio server.
+
+No adjuntes la plantilla **"Linux by Zabbix agent"** a este host: como `zabbix-agent2` corre en
+su propio contenedor, esos ítems miden el contenedor del agente (unos pocos MB de RAM, un
+proceso), no el VPS real — datos que no aportan nada. Deja este host sólo con las plantillas de
+Nginx, PHP-FPM, MySQL y Zabbix server de arriba. Para monitorizar el VPS de verdad, ver la
+siguiente sección.
 
 Nginx y PHP-FPM son alcanzables desde `zabbix-agent2` porque `nginx/server-common.conf`
 (montado sobre la config de la imagen) abre esos endpoints a la subred interna de Compose
 (`172.28.55.0/24` por defecto, definida en `docker-compose.yml`); si cambias esa subred,
 actualiza también el `allow` en `nginx/server-common.conf`.
+
+## Monitorizar el VPS y Docker (agente aparte, fuera de este stack)
+
+El `zabbix-agent2` de este repo corre deliberadamente sin privilegios, en su propio contenedor
+(ver tabla de [diferencias frente al repo oficial](#diferencias-deliberadas-frente-al-repo-oficial))
+— por diseño no tiene acceso al host, así que no puede reportar CPU/disco/red reales del VPS ni
+el estado del propio Docker. Si quieres esas métricas, la forma recomendada es instalar un
+**segundo `zabbix-agent2` directamente en el host** (paquete oficial de Zabbix para tu distro, o
+un contenedor aparte con `network_mode: host` — pero en cualquier caso fuera de este
+`docker-compose.yml`, para no tener que quitarle el aislamiento al stack principal).
+
+Conéctalo al `zabbix-server` de este stack en **modo activo** (`Active checks`), no pasivo: el
+puerto `${ZABBIX_SERVER_PORT:-10051}` ya está publicado al host, así que el agente nuevo sólo
+necesita salir hacia `127.0.0.1:${ZABBIX_SERVER_PORT:-10051}` (o la IP del VPS) — no hace falta
+abrir ni exponer ningún puerto adicional, ni resolver cómo alcanzar el host desde dentro de la
+red de Docker (que sí haría falta en modo pasivo). En `zabbix_agent2.conf` del host:
+
+```
+Hostname=<algo-distinto-de-zabbix-agent, p.ej. el hostname del VPS>
+ServerActive=127.0.0.1:10051
+```
+
+Plantillas nativas para este host nuevo:
+- **"Linux by Zabbix agent"**: ahora sí son las métricas reales del VPS (CPU, memoria, disco,
+  red), no las del contenedor.
+- **"Docker by Zabbix agent 2"**: usa el plugin nativo de Docker de agent2, que lee
+  `/var/run/docker.sock` — necesita que el agente (o su contenedor, si lo corres así) tenga
+  acceso a ese socket. Macros típicos: `{$DOCKER.API.PROTOCOL}` = `unix`,
+  `{$DOCKER.API.URI}` = `/var/run/docker.sock`.
 
 ## Actualizar la versión de Zabbix
 
