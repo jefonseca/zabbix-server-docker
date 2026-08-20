@@ -60,11 +60,65 @@ origen sólo necesita existir, no ser válido para una CA pública.
 
 - **Certificado propio (comprado, u otra CA)**: sustituye a mano
   `data/nginx/ssl/{ssl.crt,ssl.key,dhparam.pem}` y `docker compose restart zabbix-web`.
-- **Let's Encrypt automático**: si en algún despliegue no vas a usar Cloudflare y quieres un
-  certificado público real, hay un ejemplo listo en `docker-compose.override.yml.example`
-  (Ejemplo 3) que añade un contenedor Caddy delante de `zabbix-web` y gestiona la renovación
-  solo. Requiere el dominio apuntando al VPS y el puerto 80 accesible para el reto HTTP-01;
-  no lo uses a la vez que el modo Cloudflare (ambos quieren el puerto 80/443).
+- **Origin Certificate de Cloudflare** (recomendado si ya usas Cloudflare delante): en vez de un
+  autofirmado genérico, usa el certificado que emite la propia Cloudflare para el origen —
+  válido 15 años, gratis, y Cloudflare sólo confía en certificados suyos o firmados por su CA
+  cuando el modo SSL/TLS está en "Full (strict)". Cloudflare no entrega un `dhparam.pem` (no es
+  parte de un certificado, es un parámetro de intercambio de claves de nginx), así que ese
+  archivo lo sigues generando tú:
+  1. En el dashboard de Cloudflare: **SSL/TLS → Origin Server → Create Certificate** (deja las
+     opciones por defecto: RSA 2048, 15 años). Te da un PEM de certificado y uno de clave
+     privada — descárgalos o cópialos.
+  2. Guárdalos como `data/nginx/ssl/ssl.crt` (el certificado) y `data/nginx/ssl/ssl.key` (la
+     clave privada).
+  3. Genera sólo el `dhparam.pem` que falta, sin tocar los archivos que acabas de poner:
+     `./scripts/generate-certs.sh --dhparam-only`
+  4. En Cloudflare, pon el modo SSL/TLS en **Full (strict)** (Full a secas también funciona,
+     pero sin verificar que el origen sea realmente Cloudflare) y `docker compose restart
+     zabbix-web`.
+- **Let's Encrypt automático**: para cuando no quieres pasar por Cloudflare y prefieres un
+  certificado público real, validado por una CA de verdad, gestionado sin intervención manual.
+  Añade un contenedor Caddy delante de `zabbix-web` que obtiene el certificado (reto HTTP-01) y
+  lo renueva solo, sin cron ni pasos manuales — todo vive en `data/caddy/` (gitignored,
+  persistente entre reinicios).
+
+  **Requisitos, antes de tocar nada:**
+  - Un dominio/subdominio con un registro **A** (o AAAA) apuntando a la IP pública del VPS.
+  - El **puerto 80 alcanzable desde internet** en esa IP: ábrelo en el firewall del proveedor
+    (grupo de seguridad, etc.) y en el del propio VPS (`ufw allow 80,443/tcp` o equivalente).
+    Caddy lo necesita para el reto HTTP-01; también sirve para redirigir a 443.
+  - Si el dominio está en Cloudflare pero **no** quieres usar su proxy (este modo es alternativo
+    al de Cloudflare, no se combinan), pon el registro en **"DNS only"** (nube gris, no naranja)
+    mientras dure la validación — con el proxy naranja activado, Cloudflare intercepta el
+    puerto 80 y el reto HTTP-01 nunca llega a Caddy.
+  - No dejes `scripts/generate-certs.sh` publicando nada por delante: este modo hace que
+    `zabbix-web` deje de exponer 80/443 directamente (ver override abajo), así que el
+    autofirmado deja de usarse.
+
+  **Pasos:**
+  1. `cp caddy/Caddyfile.example caddy/Caddyfile` y edítalo: cambia `zabbix.tu-dominio.com` por
+     tu dominio real y, opcionalmente, descomenta la línea `tls tu-email@...` para recibir
+     avisos de Let's Encrypt si el certificado no llegara a renovarse solo.
+  2. `cp docker-compose.override.yml.example docker-compose.override.yml` y descomenta el
+     bloque completo del **Ejemplo 3** (el servicio `zabbix-web` con `ports: []` y el nuevo
+     servicio `caddy`).
+  3. `docker compose up -d` — Caddy arranca, pide el certificado a Let's Encrypt automáticamente
+     y lo guarda en `data/caddy/data/`. Sigue el proceso con
+     `docker compose logs -f caddy` (busca `certificate obtained successfully`); suele tardar
+     pocos segundos si el DNS y el puerto 80 están bien.
+  4. Ya puedes entrar por `https://zabbix.tu-dominio.com` con un certificado válido de verdad,
+     sin avisos del navegador.
+
+  **Renovación:** automática, Caddy la gestiona internamente (~30 días antes de vencer) mientras
+  el contenedor siga corriendo; no hace falta cron ni tocar nada.
+
+  **Si falla el reto HTTP-01** (el log de Caddy no llega a "certificate obtained"), lo más común
+  es alguna de estas tres cosas: el registro DNS todavía no propagó (`dig +short
+  zabbix.tu-dominio.com` debería devolver la IP del VPS), el puerto 80 sigue bloqueado en algún
+  firewall intermedio, o el proxy naranja de Cloudflare sigue activo sobre ese registro.
+
+  No combines este modo con el modo Cloudflare por defecto del `.env` (ambos quieren
+  publicar 80/443) — usa uno de los dos según el despliegue.
 
 ## `docker-compose.override.yml`: variaciones sin tocar el compose base
 

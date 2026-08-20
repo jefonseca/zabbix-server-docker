@@ -6,11 +6,13 @@
 # Uso:
 #   ./scripts/generate-certs.sh                  # genera sólo si faltan
 #   ./scripts/generate-certs.sh --force           # regenera aunque ya existan
+#   ./scripts/generate-certs.sh --dhparam-only    # sólo dhparam.pem, no toca ssl.crt/ssl.key
 #   CERT_CN=zabbix.midominio.com ./scripts/generate-certs.sh
 #
-# Si en vez de esto prefieres un certificado real (comprado, u obtenido de otra forma),
-# simplemente coloca tus ssl.crt / ssl.key / dhparam.pem en data/nginx/ssl/ y no hace falta
-# correr este script. Para Let's Encrypt automático ver docker-compose.override.yml.example.
+# Si en vez de esto prefieres un certificado real (comprado, o un Origin Certificate de
+# Cloudflare — ver sección HTTPS del README), coloca tu ssl.crt / ssl.key a mano en
+# data/nginx/ssl/ y usa --dhparam-only para generar sólo el dhparam.pem (Cloudflare no lo
+# provee). Para Let's Encrypt automático ver docker-compose.override.yml.example.
 
 set -euo pipefail
 
@@ -18,14 +20,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSL_DIR="${SCRIPT_DIR}/../data/nginx/ssl"
 CERT_CN="${CERT_CN:-zabbix.local}"
 FORCE=0
+DHPARAM_ONLY=0
 
-if [[ "${1:-}" == "--force" ]]; then
-    FORCE=1
-fi
+case "${1:-}" in
+    --force) FORCE=1 ;;
+    --dhparam-only) DHPARAM_ONLY=1 ;;
+esac
 
 mkdir -p "${SSL_DIR}"
 
-if [[ -f "${SSL_DIR}/ssl.crt" && -f "${SSL_DIR}/ssl.key" && "${FORCE}" -eq 0 ]]; then
+if [[ "${DHPARAM_ONLY}" -eq 1 ]]; then
+    echo "Modo --dhparam-only: no se toca ssl.crt/ssl.key."
+elif [[ -f "${SSL_DIR}/ssl.crt" && -f "${SSL_DIR}/ssl.key" && "${FORCE}" -eq 0 ]]; then
     echo "Ya existen ${SSL_DIR}/ssl.crt y ssl.key, no se regeneran (usa --force para forzar)."
 else
     echo "Generando certificado autofirmado (CN=${CERT_CN})..."
