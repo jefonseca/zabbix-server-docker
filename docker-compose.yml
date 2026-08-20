@@ -20,7 +20,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_bin
       - --log_bin_trust_function_creators=1
-      - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-256M}
+      - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M}
     environment:
       TZ: ${TZ:-UTC}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -41,7 +41,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-    mem_limit: ${MYSQL_MEM_LIMIT:-640m}
+    mem_limit: ${MYSQL_MEM_LIMIT:-896m}
 
   zabbix-server:
     image: zabbix/zabbix-server-mysql:${ZBX_VERSION:-alpine-7.0-latest}
@@ -101,7 +101,7 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
-    mem_limit: ${ZABBIX_SERVER_MEM_LIMIT:-256m}
+    mem_limit: ${ZABBIX_SERVER_MEM_LIMIT:-320m}
 
   zabbix-web:
     image: zabbix/zabbix-web-nginx-mysql:${ZBX_VERSION:-alpine-7.0-latest}
@@ -126,10 +126,10 @@ services:
       # eso estas 4 variables van con default seguro para VPS de 2 GB, no vacías. Ver tabla de
       # sizing en el README para subir estos valores en VPS de 4/8 GB.
       PHP_FPM_PM: ${PHP_FPM_PM:-dynamic}
-      PHP_FPM_PM_MAX_CHILDREN: ${PHP_FPM_PM_MAX_CHILDREN:-6}
+      PHP_FPM_PM_MAX_CHILDREN: ${PHP_FPM_PM_MAX_CHILDREN:-8}
       PHP_FPM_PM_START_SERVERS: ${PHP_FPM_PM_START_SERVERS:-2}
-      PHP_FPM_PM_MIN_SPARE_SERVERS: ${PHP_FPM_PM_MIN_SPARE_SERVERS:-1}
-      PHP_FPM_PM_MAX_SPARE_SERVERS: ${PHP_FPM_PM_MAX_SPARE_SERVERS:-3}
+      PHP_FPM_PM_MIN_SPARE_SERVERS: ${PHP_FPM_PM_MIN_SPARE_SERVERS:-2}
+      PHP_FPM_PM_MAX_SPARE_SERVERS: ${PHP_FPM_PM_MAX_SPARE_SERVERS:-4}
       PHP_FPM_PM_MAX_REQUESTS: ${PHP_FPM_PM_MAX_REQUESTS:-0}
       # php.ini — vacías por defecto = default interno de la imagen. Ajustables por env_vars/.
       ZBX_MAXEXECUTIONTIME: ${ZBX_MAXEXECUTIONTIME:-}
@@ -157,7 +157,7 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
-    mem_limit: ${ZABBIX_WEB_MEM_LIMIT:-256m}
+    mem_limit: ${ZABBIX_WEB_MEM_LIMIT:-384m}
 
   zabbix-agent2:
     image: zabbix/zabbix-agent2:${ZBX_VERSION:-alpine-7.0-latest}

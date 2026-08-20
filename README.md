@@ -4,8 +4,8 @@ Zabbix Server **7.0 LTS** con MySQL y frontend Nginx + PHP-FPM (imagen todo-en-u
 `zabbix-web-nginx-mysql`), listo para desplegar en un VPS con `git clone` + `.env` +
 `docker compose up -d`. Incluye un `zabbix-agent2` activado por defecto para automonitorizar
 el propio stack (MySQL, Nginx, PHP-FPM y el propio Zabbix server) con plantillas nativas.
-Los defaults están pensados para un VPS de **2 GB de RAM**, con ruta clara para escalar a 4/8 GB
-(ver [Sizing de memoria](#sizing-de-memoria)).
+Los defaults están pensados para un VPS **dedicado** de **2 GB de RAM** (nada más corre en la
+máquina), con ruta clara para escalar a 4/8 GB (ver [Sizing de memoria](#sizing-de-memoria)).
 
 ## Requisitos
 
@@ -90,30 +90,38 @@ Tiene dos usos, por eso conviene no borrarla del `.env` tras el primer arranque:
 
 ## Sizing de memoria
 
-Los valores por defecto de `.env.example` están pensados para un **VPS de 2 GB de RAM** (p.ej.
-Linode 2 GB): unos 1.25 GB de límites entre los 4 contenedores, dejando margen para el sistema
-operativo. El factor de riesgo #1 en un VPS pequeño es **PHP-FPM**: el default de la imagen es
-`pm.max_children=50` y cada child ronda 30-50 MB (hasta ~2 GB él solo si no se ajusta), por eso
-`PHP_FPM_PM_MAX_CHILDREN` y compañía van con un valor bajo desde el primer `up`, no vacíos.
+Los valores por defecto de `.env.example` asumen un **VPS dedicado** (nada más corre en la
+máquina) de **2 GB de RAM** (p.ej. Linode 2 GB). Al no compartir la máquina con otras cargas, la
+única reserva real que hace falta dejar libre es para el kernel + el propio daemon de Docker
+(~300-500 MB, no escala con el tamaño del host) más margen ante picos — no "la mitad" de la RAM.
+Por eso los límites usan **~83% de la RAM total** (~1.7 GB), y la mayor parte del presupuesto va
+a `MYSQL_INNODB_BUFFER_POOL_SIZE`, que es la variable de mayor impacto real en el rendimiento
+(menos I/O a disco al leer/escribir historial). El factor de riesgo #1 en cualquier VPS sigue
+siendo **PHP-FPM**: el default de la imagen es `pm.max_children=50` y cada child ronda 30-50 MB
+(hasta ~2 GB él solo si no se ajusta), por eso `PHP_FPM_PM_MAX_CHILDREN` y compañía van con un
+valor explícito desde el primer `up`, no vacíos.
 
 Para VPS más grandes, sube estas mismas variables en `.env` (no hace falta tocar el compose):
 
 | Variable | 2 GB (default) | 4 GB | 8 GB |
 |---|---|---|---|
-| `MYSQL_INNODB_BUFFER_POOL_SIZE` | 256M | 512M | 1G |
-| `MYSQL_MEM_LIMIT` | 640m | 1200m | 2g |
-| `ZABBIX_SERVER_MEM_LIMIT` | 256m | 384m | 512m |
-| `PHP_FPM_PM_MAX_CHILDREN` | 6 | 15 | 30 |
+| `MYSQL_INNODB_BUFFER_POOL_SIZE` | 512M | 1G | 2G |
+| `MYSQL_MEM_LIMIT` | 896m | 1536m | 3g |
+| `ZABBIX_SERVER_MEM_LIMIT` | 320m | 512m | 768m |
+| `PHP_FPM_PM_MAX_CHILDREN` | 8 | 16 | 32 |
 | `PHP_FPM_PM_START_SERVERS` | 2 | 4 | 8 |
-| `PHP_FPM_PM_MIN_SPARE_SERVERS` | 1 | 2 | 4 |
-| `PHP_FPM_PM_MAX_SPARE_SERVERS` | 3 | 8 | 16 |
-| `ZABBIX_WEB_MEM_LIMIT` | 256m | 384m | 512m |
-| `ZABBIX_AGENT_MEM_LIMIT` | 96m | 128m | 128m |
-| **Total límites** | **~1.25 GB** | **~2.1 GB** | **~3.2 GB** |
+| `PHP_FPM_PM_MIN_SPARE_SERVERS` | 2 | 3 | 6 |
+| `PHP_FPM_PM_MAX_SPARE_SERVERS` | 4 | 8 | 16 |
+| `ZABBIX_WEB_MEM_LIMIT` | 384m | 640m | 1024m |
+| `ZABBIX_AGENT_MEM_LIMIT` | 96m | 128m | 192m |
+| **Total límites** | **~1.7 GB (83%)** | **~2.8 GB (69%)** | **~4.9 GB (61%)** |
 
-`pm.max_children` en 4/8 GB es orientativo — súbelo más si el frontend sirve a muchos usuarios
-concurrentes; bájalo si prefieres dejar más margen a MySQL. Confirma el consumo real tras el
-primer arranque con `docker compose stats`.
+El % de uso baja a propósito en los tiers grandes: en 2 GB hay que aprovechar cada MB, pero en
+4/8 GB sobra margen de todos modos para crecer (más hosts monitorizados, más items, más
+retención de historial) sin tener que volver a tocar el sizing. Si tu VPS no es dedicado (corre
+otras cosas además de este stack), baja estos valores en proporción al resto de la carga.
+`pm.max_children` es orientativo — súbelo más si el frontend sirve a muchos usuarios
+concurrentes. Confirma el consumo real tras el primer arranque con `docker compose stats`.
 
 ## Personalización avanzada (`env_vars/`)
 
