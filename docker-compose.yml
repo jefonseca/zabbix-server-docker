@@ -110,13 +110,15 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
-      # 180s de margen: en el primer arranque zabbix-server importa el schema completo de la
-      # BD (miles de sentencias SQL) antes de abrir el puerto 10051 — en un VPS modesto puede
-      # tardar varios minutos. Si el healthcheck se marca "unhealthy" antes de que termine,
-      # "docker compose up -d" aborta el arranque de zabbix-web/zabbix-agent2 (dependen de
+      # 240s de margen: en el primer arranque zabbix-server importa el schema completo de la
+      # BD (miles de sentencias SQL, incluyendo todas las plantillas por defecto) antes de
+      # abrir el puerto 10051 — en un VPS modesto puede tardar 2-4 minutos (medido: ~174s en
+      # un VPS de 2 GB). Si el healthcheck se marca "unhealthy" antes de que termine, "docker
+      # compose up -d" aborta el arranque de zabbix-web/zabbix-agent2 (dependen de
       # "service_healthy") aunque zabbix-server siga importando y termine bien poco después
-      # — en ese caso basta con volver a correr "docker compose up -d".
-      start_period: 180s
+      # — en ese caso basta con volver a correr "docker compose up -d". Sólo pasa una vez, con
+      # la BD vacía; en reinicios posteriores el schema ya existe y arranca en segundos.
+      start_period: 240s
     mem_limit: ${ZABBIX_SERVER_MEM_LIMIT:-320m}
 
   zabbix-web:

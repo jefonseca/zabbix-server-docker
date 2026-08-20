@@ -37,6 +37,15 @@ Frontend disponible en `https://<ip-o-dominio>/` (certificado autofirmado — no
 navegador avise si accedes directo, sin Cloudflare por delante). Login inicial: `Admin` / `zabbix`
 — cámbialo enseguida.
 
+**El primer arranque tarda, y es normal**: con la base de datos vacía, `zabbix-server` importa
+el schema completo (miles de sentencias SQL, incluidas todas las plantillas por defecto) antes
+de quedar `healthy` — en un VPS modesto puede tardar **2-4 minutos** (medido: ~174s en un VPS
+de 2 GB). Mientras tanto es normal ver `zabbix-zabbix-server-1  Up ... (health: starting)` en
+`docker compose ps`. Sólo pasa esta vez: en reinicios posteriores el schema ya existe y arranca
+en segundos. Si de todos modos ves `dependency failed to start` porque tu VPS es más lento
+todavía que el margen de 240s que trae el healthcheck, simplemente vuelve a correr
+`docker compose up -d` — `zabbix-server` sigue importando en segundo plano y termina bien.
+
 ## Estructura del repo
 
 ```
@@ -269,15 +278,39 @@ nombre desde Zabbix (Alertas → Métodos de notificación, o Data collection �
 ## Monitorizar el propio stack (zabbix-agent2)
 
 El contenedor `zabbix-agent2` viene activo por defecto, en la misma red interna que el resto,
-listo para que el `zabbix-server` lo consulte. Para que reporte datos hace falta configurar
-host(s) y plantillas **nativas** desde el frontend web (Data collection → Hosts):
+listo para que el `zabbix-server` lo consulte en **modo pasivo** (el server se conecta al
+agente, no al revés). Zabbix también trae de fábrica un host precreado llamado **"Zabbix
+server"**, con la plantilla "Linux by Zabbix agent" ya adjunta y su interfaz de agente apuntando
+a `127.0.0.1:10050` — es decir, al propio contenedor `zabbix-server`, donde **no corre ningún
+agente** (el agente vive aparte, en `zabbix-agent2`). Tal cual viene, ese host nunca va a
+reportar nada y sólo genera errores de conexión en el log
+(`item ... failed: first network error`). Hay que reconfigurarlo — no crear uno nuevo, se
+reutiliza el mismo:
 
-- **Nginx** (host apuntando al agente, plantilla **"Nginx by Zabbix agent"**), macros:
+1. **Data collection → Hosts → "Zabbix server"** → pestaña **Host**: cambia el campo *Host
+   name* de `Zabbix server` a `${COMPOSE_PROJECT_NAME:-zabbix}-agent` (con los defaults de
+   `.env`, literalmente `zabbix-agent`) — debe coincidir exacto con el `Hostname` que trae
+   configurado el contenedor (variable `ZBX_HOSTNAME` en `docker-compose.yml`). Sin esto, además
+   de que las comprobaciones activas no se identifican, verás en el log de `zabbix-server`
+   mensajes tipo `cannot process heartbeat from host "zabbix-agent": host not found`. El
+   *Visible name* lo puedes dejar como quieras (p.ej. "Zabbix server").
+2. Pestaña **Interfaces**: edita la interfaz tipo *Agent* — cambia la IP `127.0.0.1` por DNS
+   name `zabbix-agent2`, puerto `10050`, y marca **Connect to: DNS** (no IP: el contenedor no
+   tiene una IP fija dentro de `zabbix-net`, pero su nombre sí resuelve vía el DNS interno de
+   Docker). Con esto las comprobaciones pasivas (Nginx, PHP-FPM, MySQL de abajo) ya llegan al
+   contenedor correcto.
+3. Pestaña **Templates**: quita **"Linux by Zabbix agent"** — como `zabbix-agent2` corre en su
+   propio contenedor, esos ítems miden el contenedor del agente (unos pocos MB de RAM, un
+   proceso), no el VPS real, datos que no aportan nada (para monitorizar el VPS de verdad, ver
+   la siguiente sección). Deja **"Zabbix server health"** (ya viene adjunta; son ítems internos
+   que evalúa el propio server, no pasan por el agente) y añade, en el mismo host:
+
+- **Nginx** (plantilla **"Nginx by Zabbix agent"**), macros:
   - `{$NGINX.STUB_STATUS.HOST}` = `zabbix-web`
   - `{$NGINX.STUB_STATUS.PORT}` = `8080`
   - `{$NGINX.STUB_STATUS.PATH}` = `nginx-status` *(la imagen usa `/nginx-status`, no el
     `/basic_status` que trae la plantilla por defecto)*
-- **PHP-FPM** (mismo host, plantilla **"PHP-FPM by Zabbix agent"**), macros:
+- **PHP-FPM** (misma plantilla host, **"PHP-FPM by Zabbix agent"**), macros:
   - `{$PHP_FPM.HOST}` = `zabbix-web`
   - `{$PHP_FPM.PORT}` = `8080` *(`status`/`ping` ya coinciden con el default de la plantilla)*
   - El ítem de conteo de procesos (`proc.get`) no va a poblarse: PHP-FPM corre en el
@@ -288,15 +321,6 @@ host(s) y plantillas **nativas** desde el frontend web (Data collection → Host
   - `{$MYSQL.DSN}` = `tcp://mysql-server:3306`
   - `{$MYSQL.USER}` = `zbx_monitor`
   - `{$MYSQL.PASSWORD}` = el valor de `MYSQL_MONITOR_PASSWORD` en tu `.env`
-- **Salud del propio Zabbix server**: no usa agente. Activa el host predefinido
-  **"Zabbix server"** (Data collection → Hosts) y adjúntale la plantilla **"Zabbix server
-  health"** — son ítems internos que evalúa el propio server.
-
-No adjuntes la plantilla **"Linux by Zabbix agent"** a este host: como `zabbix-agent2` corre en
-su propio contenedor, esos ítems miden el contenedor del agente (unos pocos MB de RAM, un
-proceso), no el VPS real — datos que no aportan nada. Deja este host sólo con las plantillas de
-Nginx, PHP-FPM, MySQL y Zabbix server de arriba. Para monitorizar el VPS de verdad, ver la
-siguiente sección.
 
 Nginx y PHP-FPM son alcanzables desde `zabbix-agent2` porque `nginx/server-common.conf`
 (montado sobre la config de la imagen) abre esos endpoints a la subred interna de Compose
