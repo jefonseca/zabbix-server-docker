@@ -159,7 +159,24 @@ services:
       - ./data/nginx/ssl:/etc/ssl/nginx:ro
       # Habilita que zabbix-agent2 (otro contenedor) pueda leer /nginx-status y /status,/ping
       # — ver nginx/server-common.conf para el detalle de por qué hace falta este override.
-      - ./nginx/server-common.conf:/etc/nginx/includes/server-common.conf:ro
+      #
+      # OJO: NO se monta directo en /etc/nginx/includes/server-common.conf. El entrypoint de
+      # la imagen hace "sed -i" sobre ese archivo en cada arranque (sustituye {HTTP_INDEX_FILE}
+      # y {FCGI_READ_TIMEOUT}), y sed -i mueve un temporal sobre el destino con rename() — algo
+      # que el kernel rechaza con "Resource busy" si el destino es en sí un punto de montaje
+      # (bind-mount de un solo archivo). Por eso se monta en una ruta aparte y el entrypoint
+      # de abajo lo copia al sitio real antes de que arranque el original: así el archivo que
+      # ve "sed -i" es un fichero normal dentro del contenedor, no un mountpoint.
+      - ./nginx/server-common.conf:/docker-custom/server-common.conf:ro
+    # Copia nuestro server-common.conf al sitio real y encadena con el entrypoint original de
+    # la imagen (sin tocar "command", así que sigue usando su CMD por defecto).
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cp /docker-custom/server-common.conf /etc/nginx/includes/server-common.conf
+        exec /usr/bin/docker-entrypoint.sh "$@"
+      - --
     # Tuning avanzado adicional (SSO, restricciones de acceso al GUI, DB TLS...), opcional.
     env_file:
       - path: ./env_vars/zabbix-web.env
