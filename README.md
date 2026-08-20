@@ -277,22 +277,31 @@ nombre desde Zabbix (Alertas → Métodos de notificación, o Data collection �
 
 ## Monitorizar el propio stack (zabbix-agent2)
 
-El contenedor `zabbix-agent2` viene activo por defecto, en la misma red interna que el resto,
-listo para que el `zabbix-server` lo consulte en **modo pasivo** (el server se conecta al
-agente, no al revés). Zabbix también trae de fábrica un host precreado llamado **"Zabbix
-server"**, con la plantilla "Linux by Zabbix agent" ya adjunta y su interfaz de agente apuntando
-a `127.0.0.1:10050` — es decir, al propio contenedor `zabbix-server`, donde **no corre ningún
-agente** (el agente vive aparte, en `zabbix-agent2`). Tal cual viene, ese host nunca va a
-reportar nada y sólo genera errores de conexión en el log
-(`item ... failed: first network error`). Hay que reconfigurarlo — no crear uno nuevo, se
-reutiliza el mismo:
+El contenedor `zabbix-agent2` viene activo por defecto, en la misma red interna que el resto.
+Todas las plantillas que usamos en esta sección (Nginx, PHP-FPM, MySQL) son de **comprobación
+pasiva** — el server se conecta al agente, no al revés — así que en principio no necesitarías
+nada de modo activo. Pero la imagen oficial, en cuanto le pasas `ZBX_SERVER_HOST` (que ya viene
+puesto en `docker-compose.yml`), configura el agente para **los dos modos a la vez**: además de
+`Server=zabbix-server` (pasivo), pone automáticamente `ServerActive=zabbix-server:10051`
+(activo) — es un efecto del propio entrypoint de la imagen, no algo que este repo pida a
+propósito. Por eso el agente igual intenta registrarse activamente contra el server aunque no lo
+uses para nada de lo de aquí, y sin un host que coincida verás igualmente en el log de
+`zabbix-server` el ruido de `cannot process heartbeat from host "zabbix-agent": host not found`.
+
+Zabbix también trae de fábrica un host precreado llamado **"Zabbix server"**, con la plantilla
+"Linux by Zabbix agent" ya adjunta y su interfaz de agente apuntando a `127.0.0.1:10050` — es
+decir, al propio contenedor `zabbix-server`, donde **no corre ningún agente** (el agente vive
+aparte, en `zabbix-agent2`). Tal cual viene, ese host nunca va a reportar nada y sólo genera
+errores de conexión en el log (`item ... failed: first network error`). Hay que reconfigurarlo —
+no crear uno nuevo, se reutiliza el mismo:
 
 1. **Data collection → Hosts → "Zabbix server"** → pestaña **Host**: cambia el campo *Host
    name* de `Zabbix server` a `${COMPOSE_PROJECT_NAME:-zabbix}-agent` (con los defaults de
    `.env`, literalmente `zabbix-agent`) — debe coincidir exacto con el `Hostname` que trae
-   configurado el contenedor (variable `ZBX_HOSTNAME` en `docker-compose.yml`). Sin esto, además
-   de que las comprobaciones activas no se identifican, verás en el log de `zabbix-server`
-   mensajes tipo `cannot process heartbeat from host "zabbix-agent": host not found`. El
+   configurado el contenedor (variable `ZBX_HOSTNAME` en `docker-compose.yml`). No es necesario
+   para que las comprobaciones pasivas de abajo funcionen (esas dependen sólo del paso 2), pero
+   sin esto verás indefinidamente el mensaje de "host not found" de arriba en el log — el
+   agente sigue intentando el registro activo igual, esté o no ese host bien configurado. El
    *Visible name* lo puedes dejar como quieras (p.ej. "Zabbix server").
 2. Pestaña **Interfaces**: edita la interfaz tipo *Agent* — cambia la IP `127.0.0.1` por DNS
    name `zabbix-agent2`, puerto `10050`, y marca **Connect to: DNS** (no IP: el contenedor no
@@ -349,12 +358,47 @@ ServerActive=127.0.0.1:10051
 ```
 
 Plantillas nativas para este host nuevo:
-- **"Linux by Zabbix agent"**: ahora sí son las métricas reales del VPS (CPU, memoria, disco,
-  red), no las del contenedor.
-- **"Docker by Zabbix agent 2"**: usa el plugin nativo de Docker de agent2, que lee
-  `/var/run/docker.sock` — necesita que el agente (o su contenedor, si lo corres así) tenga
-  acceso a ese socket. Macros típicos: `{$DOCKER.API.PROTOCOL}` = `unix`,
-  `{$DOCKER.API.URI}` = `/var/run/docker.sock`.
+- **"Linux by Zabbix agent active"** (ojo: la variante *active*, no "Linux by Zabbix agent" a
+  secas — esa es la pasiva, y este agente sólo hace checks activos). Con esta sí obtienes las
+  métricas reales del VPS (CPU, memoria, disco, red), no las del contenedor.
+- **"Docker by Zabbix agent 2"**: usa el plugin nativo de Docker de agent2 (lee
+  `/var/run/docker.sock` vía el parámetro `Plugins.Docker.Endpoint` de `zabbix_agent2.conf` —
+  por defecto ya es `unix:///var/run/docker.sock`, normalmente no hace falta tocarlo). A
+  diferencia de "Linux by Zabbix agent active", **esta plantilla no tiene variante activa** —
+  sus ítems vienen configurados como pasivos de fábrica, lo que no combina con un agente
+  puesto sólo en modo activo como el de aquí. Además usa **descubrimiento automático (LLD)**
+  para listar contenedores/imágenes: los ítems de cada contenedor no existen de antemano, se
+  crean sobre la marcha a partir de "prototipos de ítem" colgados de la regla de descubrimiento
+  — por eso no basta con cambiar el tipo de los ítems ya creados (**Data collection → Hosts →
+  Items**), hay que tocar también las reglas de descubrimiento y sus prototipos (**Data
+  collection → Hosts → Discovery**), o cualquier contenedor nuevo que aparezca después seguirá
+  creando sus ítems como pasivos. Lo más limpio es clonar la plantilla entera y editar el clon,
+  no el host:
+  1. **Data collection → Templates**, busca "Docker by Zabbix agent 2" → **Clone** (clonado
+     completo: trae ítems, reglas de descubrimiento y prototipos). Renómbrala, p.ej. "Docker by
+     Zabbix agent 2 (active)".
+  2. Dentro del clon, pestaña **Items**: selecciona todos → **Mass update → Type → Zabbix agent
+     (active)** (deja los de tipo *Dependent item* como están, esos no se conectan al agente
+     directamente).
+  3. Pestaña **Discovery**: entra a cada regla ("Containers discovery", "Images discovery") y
+     cambia su propio *Type* a **Zabbix agent (active)**; dentro de cada una, en **Item
+     prototypes**, repite el mass-update del paso 2 sobre los prototipos que no sean
+     *Dependent item*.
+  4. Enlaza este clon al host en vez de la plantilla original. Si en el futuro reimportas una
+     versión más nueva de "Docker by Zabbix agent 2" desde Zabbix, tendrás que rehacer estos
+     cambios sobre la nueva versión (clonar de nuevo o reaplicar a mano) — no hay forma de que
+     Zabbix sincronice automáticamente un clon divergente con el original.
+  - Alternativa (no recomendada, requiere abrir el host a los contenedores): usar la plantilla
+    original tal cual (pasiva), añadiendo `Server=` en `zabbix_agent2.conf` del host y
+    exponiendo su puerto 10050 para que `zabbix-server` pueda conectarse — vuelve a la
+    exposición que esta sección evita a propósito.
+  - **Acceso al socket**: el proceso del agente necesita permiso de lectura sobre
+    `/var/run/docker.sock` (normalmente propiedad de `root:docker`). Si lo instalaste como
+    paquete nativo, añade el usuario `zabbix` al grupo `docker` (`sudo usermod -aG docker
+    zabbix` y reinicia el servicio `zabbix-agent2`). Si lo corres como contenedor aparte con
+    `network_mode: host`, monta el socket (`-v /var/run/docker.sock:/var/run/docker.sock:ro`)
+    y añade el grupo `docker` del host al contenedor (`--group-add` con el GID de `docker` en
+    el host, o corre el contenedor como root si prefieres simplicidad sobre mínimo privilegio).
 
 ## Actualizar la versión de Zabbix
 
