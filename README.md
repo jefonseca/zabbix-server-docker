@@ -22,7 +22,8 @@ sudo git clone <url-de-este-repo> /opt/zabbix
 cd /opt/zabbix
 
 cp .env.example .env
-# Edita .env: como mínimo cambia MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD y MYSQL_MONITOR_PASSWORD.
+# Edita .env: busca los 3 campos marcados ⚠️ OBLIGATORIO (MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD,
+# MYSQL_MONITOR_PASSWORD) y cámbialos. El resto ya trae defaults razonables.
 nano .env
 
 ./scripts/generate-certs.sh   # certificado autofirmado para HTTPS (ver sección HTTPS abajo)
@@ -70,6 +71,30 @@ Copia `docker-compose.override.yml.example` a `docker-compose.override.yml` (git
 edítalo. Compose lo aplica automáticamente en cada `up`. Ojo: las claves tipo lista (`ports`,
 `volumes`, `profiles`...) se **reemplazan por completo**, no se concatenan — así es como el
 ejemplo de Let's Encrypt puede desactivar limpiamente los `ports` de `zabbix-web`.
+
+## ¿Por qué MySQL 8.4 y no MariaDB o PostgreSQL+TimescaleDB?
+
+Zabbix 7.0 soporta oficialmente MySQL (8.0.30-9.7.x, incluyendo 8.4.x desde 7.0.1), MariaDB
+(10.5-12.3.x) y PostgreSQL (con o sin TimescaleDB) por igual. La elección aquí no es "porque
+upstream lo hace así", sino esto:
+
+- **MySQL vs. MariaDB**: a la escala de un VPS personal (no miles de hosts), el rendimiento
+  entre ambos motores es prácticamente idéntico — ambos usan InnoDB, mismo protocolo, Zabbix
+  los trata igual. No hay un motivo técnico de peso para elegir uno u otro; es indistinto.
+  Este repo usa **MySQL 8.4** (el release LTS vigente de Oracle, con horizonte de soporte más
+  largo que 8.0). Cambiar a MariaDB, si algún día conviene, es tan simple como cambiar
+  `image: mysql:...` por `image: mariadb:...` en `docker-compose.yml` — usa las mismas
+  variables `MYSQL_*` y el mismo mecanismo de `docker-entrypoint-initdb.d`.
+- **PostgreSQL + TimescaleDB**: se evaluó y se descartó para este despliegue. Su ventaja real
+  (particionado automático de las tablas de historial/trends vía hypertables) sólo importa
+  cuando el housekeeping tiene que borrar sobre tablas enormes — muchos hosts, retención larga.
+  En un VPS personal ese escenario no aplica: MySQL sin particionar va sobrado. A cambio,
+  migrar costaría reescribir el init de la BD (Zabbix requiere correr un script
+  `timescaledb.sql` aparte del schema normal, no 100% automático como con MySQL) y rehacer toda
+  la plantilla nativa de monitorización de la BD que ya está montada aquí ("MySQL by Zabbix
+  agent 2" → "PostgreSQL by Zabbix agent 2": otro usuario, otras macros, otros grants). Si el
+  despliegue creciera mucho a futuro (cientos de hosts, retención larga), vale la pena
+  reconsiderar esto — hoy no se justifica.
 
 ## Sobre `MYSQL_ROOT_PASSWORD`
 
