@@ -23,7 +23,13 @@ services:
       - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M}
     environment:
       TZ: ${TZ:-UTC}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # Opcional: si la dejas vacía (default), MYSQL_RANDOM_ROOT_PASSWORD hace que MySQL genere
+      # una al azar en el primer arranque (queda una sola vez en "docker compose logs
+      # mysql-server", busca "GENERATED ROOT PASSWORD"). Sólo la usa, dentro de este mismo
+      # contenedor, mysql-init/01-create-zbx-monitor-user.sh — Zabbix en sí no la necesita para
+      # nada (ver "Sobre MYSQL_ROOT_PASSWORD" en el README).
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      MYSQL_RANDOM_ROOT_PASSWORD: ${MYSQL_RANDOM_ROOT_PASSWORD:-}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-zabbix}
       MYSQL_USER: ${MYSQL_USER:-zabbix}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
@@ -36,7 +42,9 @@ services:
       - path: ./env_vars/mysql.env
         required: false
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      # Usa el usuario de aplicación (siempre conocido), no root (que puede ser aleatorio y
+      # desconocido). mysqladmin ping no necesita privilegios de administración.
+      test: ["CMD-SHELL", "mysqladmin ping -u\"$$MYSQL_USER\" -p\"$$MYSQL_PASSWORD\" --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -57,8 +65,6 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-zabbix}
       MYSQL_USER: ${MYSQL_USER:-zabbix}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      # Sólo se usa en el primer arranque, para crear el schema si la BD está vacía.
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       # Tuning de zabbix_server.conf vía variables nativas de la imagen (verificado contra
       # templates/entrypoints/lib/server-config.sh de zabbix/zabbix-docker rama 7.0). Vacías por
       # defecto = usa el default interno de Zabbix, sin cambio de comportamiento. Para el resto de
